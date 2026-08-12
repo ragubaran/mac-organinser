@@ -1,0 +1,52 @@
+{
+  "name": "mac-organinser",
+  "version": "1.0.0",
+  "description": "Mac tool to find duplicates, analyze space, organize files, and clear developer caches.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "pack": "bunx electron-builder --dir",
+    "dist": "bun run build && bunx electron-builder",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "build": {
+    "appId": "com.filesorganizer.app",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        "dmg"
+      ]
+    },
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "src-main/**/*"
+    ]
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
+    "@types/react": "^18.2.15",
+    "@types/react-dom": "^18.2.7",
+    "@vitejs/plugin-react": "^4.0.3",
+    "@vitest/coverage-v8": "^1.0.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.0.2",
+    "vite": "^4.4.5",
+    "vitest": "^1.0.0"
+  }
+}
