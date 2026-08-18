@@ -110,6 +110,56 @@ describe('scanner', () => {
       }));
     });
 
+    it('should find duplicates across multiple directories', () => {
+      vi.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        if (dir === 'dirA') return ['doc1.txt'];
+        if (dir === 'dirB') return ['doc2.txt'];
+        return [];
+      });
+
+      vi.spyOn(fs, 'statSync').mockImplementation((p) => {
+        if (p === path.join('dirA', 'doc1.txt')) return { size: 50, isDirectory: () => false };
+        if (p === path.join('dirB', 'doc2.txt')) return { size: 50, isDirectory: () => false };
+        return { isDirectory: () => false };
+      });
+
+      vi.spyOn(crypto, 'createHash').mockImplementation(() => {
+        let data = '';
+        return {
+          update: (d) => { data += d; },
+          digest: () => 'identical-hash'
+        };
+      });
+
+      vi.spyOn(fs, 'readFileSync').mockImplementation(() => 'same file content');
+
+      const duplicates = findDuplicates(['dirA', 'dirB']);
+      expect(duplicates).toHaveLength(1);
+      expect(duplicates[0]).toEqual(expect.objectContaining({
+        original: path.join('dirA', 'doc1.txt'),
+        duplicate: path.join('dirB', 'doc2.txt'),
+        size: 50,
+        checksum: 'identical-hash'
+      }));
+    });
+
+    it('should handle duplicate folder arguments and empty/invalid input', () => {
+      vi.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        if (dir === 'dirA') return ['doc1.txt'];
+        return [];
+      });
+      vi.spyOn(fs, 'statSync').mockImplementation(() => ({ size: 50, isDirectory: () => false }));
+      vi.spyOn(crypto, 'createHash').mockImplementation(() => ({
+        update: vi.fn(),
+        digest: () => 'hash'
+      }));
+      vi.spyOn(fs, 'readFileSync').mockReturnValue('data');
+
+      expect(findDuplicates([])).toEqual([]);
+      expect(findDuplicates(null)).toEqual([]);
+      expect(findDuplicates(['dirA', 'dirA'])).toEqual([]);
+    });
+
     it('should handle errors gracefully during scan', () => {
       vi.spyOn(fs, 'readdirSync').mockImplementation(() => { throw new Error('Permission denied'); });
       const duplicates = findDuplicates('root');

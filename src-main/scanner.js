@@ -42,10 +42,11 @@ function hashFile(filePath) {
   }
 }
 
-function findDuplicates(folderPath) {
+function findDuplicates(folderPathOrPaths) {
   const sizeMap = {};
   const duplicates = [];
   const visitedDirs = new Set();
+  const visitedFiles = new Set();
 
   function scanDir(dir) {
     try {
@@ -68,6 +69,16 @@ function findDuplicates(folderPath) {
           if (isDirectory) {
             scanDir(fullPath);
           } else {
+            let realFilePath = fullPath;
+            try {
+              if (typeof fs.realpathSync === 'function') {
+                realFilePath = fs.realpathSync(fullPath);
+              }
+            } catch (e) {}
+
+            if (visitedFiles.has(realFilePath)) continue;
+            visitedFiles.add(realFilePath);
+
             const size = (stats && stats.size !== undefined) ? stats.size : 0;
             if (!sizeMap[size]) {
               sizeMap[size] = [fullPath];
@@ -84,7 +95,15 @@ function findDuplicates(folderPath) {
     }
   }
 
-  scanDir(folderPath);
+  const folderPaths = Array.isArray(folderPathOrPaths)
+    ? folderPathOrPaths.filter(Boolean)
+    : (folderPathOrPaths ? [folderPathOrPaths] : []);
+
+  for (const folder of folderPaths) {
+    if (typeof folder === 'string' && folder.trim()) {
+      scanDir(folder.trim());
+    }
+  }
 
   // Compare SHA-256 checksums for files that have identical sizes
   for (const [sizeStr, fileList] of Object.entries(sizeMap)) {

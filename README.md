@@ -6,7 +6,7 @@ A lightweight, native-feeling macOS utility application built with Electron, Rea
 
 - **Developer Cache Cleaner**: One-click cleanup for Docker, NPM, PNPM, and Yarn to quickly free up disk space.
 - **Smart Organizer**: Scans a selected folder and automatically groups loose files into categories (Images, Documents, Archives, Audio, Video) based on predefined rules.
-- **Duplicate Finder**: Scans a folder to find exact duplicate files by comparing their cryptographic hashes, allowing you to delete duplicates and recover space.
+- **Duplicate Finder**: Recursively scans across single or multiple directories to find exact duplicate files by comparing file sizes and cryptographic SHA-256 hashes, allowing you to delete duplicates and recover space.
 
 ## Tech Stack
 

@@ -104,15 +104,19 @@ ipcMain.handle('clean-cache', async (event, commandName) => {
   }
 });
 
-ipcMain.handle('select-folder', async () => {
+ipcMain.handle('select-folder', async (event, options = {}) => {
   try {
+    const properties = ['openDirectory'];
+    if (options && options.allowMultiple) {
+      properties.push('multiSelections');
+    }
     const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory']
+      properties
     });
     if (result.canceled || result.filePaths.length === 0) {
       return null;
     }
-    return result.filePaths[0];
+    return (options && options.allowMultiple) ? result.filePaths : result.filePaths[0];
   } catch (error) {
     return null;
   }
@@ -127,9 +131,9 @@ ipcMain.handle('organize-folder', async (event, folderPath) => {
   }
 });
 
-ipcMain.handle('find-duplicates', async (event, folderPath) => {
+ipcMain.handle('find-duplicates', async (event, folderPathOrPaths) => {
   try {
-    const duplicates = scanner.findDuplicates(folderPath);
+    const duplicates = scanner.findDuplicates(folderPathOrPaths);
     return { success: true, duplicates };
   } catch (error) {
     return { success: false, error: error.message };

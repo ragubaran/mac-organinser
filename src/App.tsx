@@ -35,7 +35,7 @@ function App() {
   const [isOrganizing, setIsOrganizing] = useState(false);
 
   // Duplicate Finder state
-  const [duplicateFolder, setDuplicateFolder] = useState('');
+  const [duplicateFolders, setDuplicateFolders] = useState<string[]>([]);
   const [duplicates, setDuplicates] = useState<Array<{ original: string; duplicate: string; size?: number; checksum?: string }>>([]);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [isScanning, setIsScanning] = useState(false);
@@ -93,32 +93,65 @@ function App() {
   const handleSelectFolder = async (target: 'organizer' | 'duplicate') => {
     const ipc = getIpc();
     if (!ipc) {
-      const path = prompt('Enter folder path manually:');
-      if (path) {
-        if (target === 'organizer') setOrganizerFolder(path);
-        else setDuplicateFolder(path);
-        addLog('info', `Manually entered folder for ${target}: ${path}`);
+      const pathInput = prompt(
+        target === 'organizer'
+          ? 'Enter folder path manually:'
+          : 'Enter folder path(s) manually (comma-separated for multiple):'
+      );
+      if (pathInput) {
+        if (target === 'organizer') {
+          setOrganizerFolder(pathInput.trim());
+          setOrganizerResult(null);
+        } else {
+          const entered = pathInput.split(',').map((p) => p.trim()).filter(Boolean);
+          if (entered.length > 0) {
+            setDuplicateFolders((prev) => Array.from(new Set([...prev, ...entered])));
+            setDuplicates([]);
+            setSelectedIndices(new Set());
+            setHasScanned(false);
+          }
+        }
+        addLog('info', `Manually entered folder(s) for ${target}: ${pathInput}`);
       }
       return;
     }
     try {
-      const selectedPath = await ipc.invoke('select-folder');
-      if (selectedPath) {
+      const selected = await ipc.invoke('select-folder', { allowMultiple: target === 'duplicate' });
+      if (selected) {
         if (target === 'organizer') {
-          setOrganizerFolder(selectedPath);
+          const singlePath = Array.isArray(selected) ? selected[0] : selected;
+          setOrganizerFolder(singlePath);
           setOrganizerResult(null);
+          addLog('info', `Selected folder for organizer: ${singlePath}`);
         } else {
-          setDuplicateFolder(selectedPath);
+          const newPaths: string[] = Array.isArray(selected) ? selected : [selected];
+          setDuplicateFolders((prev) => Array.from(new Set([...prev, ...newPaths])));
           setDuplicates([]);
           setSelectedIndices(new Set());
           setHasScanned(false);
+          addLog('info', `Added folder(s) for duplicate scan: ${newPaths.join(', ')}`);
         }
-        addLog('info', `Selected folder for ${target}: ${selectedPath}`);
       }
     } catch (e: any) {
       addLog('error', `Failed to select folder for ${target}: ${e.message}`);
       alert(`Failed to select folder: ${e.message}`);
     }
+  };
+
+  const handleRemoveDuplicateFolder = (folderToRemove: string) => {
+    setDuplicateFolders((prev) => prev.filter((f) => f !== folderToRemove));
+    setDuplicates([]);
+    setSelectedIndices(new Set());
+    setHasScanned(false);
+    addLog('info', `Removed folder from duplicate scan: ${folderToRemove}`);
+  };
+
+  const handleClearDuplicateFolders = () => {
+    setDuplicateFolders([]);
+    setDuplicates([]);
+    setSelectedIndices(new Set());
+    setHasScanned(false);
+    addLog('info', 'Cleared all duplicate scan folders.');
   };
 
   // Smart Organizer action
@@ -151,8 +184,8 @@ function App() {
 
   // Duplicate Finder action
   const handleScanDuplicates = async () => {
-    if (!duplicateFolder) {
-      alert('Please select a folder first.');
+    if (duplicateFolders.length === 0) {
+      alert('Please select at least one folder first.');
       return;
     }
     const ipc = getIpc();
@@ -160,14 +193,14 @@ function App() {
     setIsScanning(true);
     setHasScanned(false);
     setSelectedIndices(new Set());
-    addLog('info', `Scanning recursively for duplicates in: ${duplicateFolder}`);
+    addLog('info', `Scanning recursively for duplicates in ${duplicateFolders.length} directory/directories: ${duplicateFolders.join(', ')}`);
     try {
-      const result = await ipc.invoke('find-duplicates', duplicateFolder);
+      const result = await ipc.invoke('find-duplicates', duplicateFolders);
       if (result.success) {
         const dups = result.duplicates || [];
         setDuplicates(dups);
         setHasScanned(true);
-        addLog('success', `Recursive scan complete. Found ${dups.length} duplicate pair(s).`);
+        addLog('success', `Recursive scan complete across ${duplicateFolders.length} directory/directories. Found ${dups.length} duplicate pair(s).`);
       } else {
         addLog('error', `Scan failed: ${result.error}`);
         alert(`Scan failed: ${result.error}`);
@@ -495,32 +528,103 @@ function App() {
         {activeTab === 'duplicate' && (
           <div className="glass-card animate-fade-in">
             <div style={{ marginBottom: '24px' }}>
-              <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#f8fafc' }}>Duplicate Finder (Recursive)</h2>
+              <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#f8fafc' }}>Duplicate Finder (Multi-Directory & Recursive)</h2>
               <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '4px' }}>
-                Recursively scan directory trees for exact duplicate files using file size & SHA-256 checksum matching.
+                Recursively scan across single or multiple directory trees for exact duplicate files using file size & SHA-256 checksum matching.
               </p>
             </div>
 
             {/* Folder selection controls */}
-            <div style={{ display: 'flex', gap: '14px', alignItems: 'center', marginBottom: '28px' }}>
-              <button onClick={() => handleSelectFolder('duplicate')} className="btn btn-secondary">
-                📁 Choose Directory...
-              </button>
-              <input
-                type="text"
-                readOnly
-                placeholder="No directory selected"
-                value={duplicateFolder}
-                className="glass-input"
-                style={{ flex: 1 }}
-              />
-              <button
-                disabled={!duplicateFolder || isScanning}
-                onClick={handleScanDuplicates}
-                className="btn btn-primary"
-              >
-                {isScanning ? 'Scanning...' : '🔍 Scan Duplicates'}
-              </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '28px' }}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button onClick={() => handleSelectFolder('duplicate')} className="btn btn-secondary">
+                  📁 Add Directory...
+                </button>
+                {duplicateFolders.length > 0 && (
+                  <button onClick={handleClearDuplicateFolders} className="btn btn-secondary" style={{ color: '#f43f5e' }}>
+                    ✕ Clear All ({duplicateFolders.length})
+                  </button>
+                )}
+                <div style={{ flex: 1 }} />
+                <button
+                  disabled={duplicateFolders.length === 0 || isScanning}
+                  onClick={handleScanDuplicates}
+                  className="btn btn-primary"
+                >
+                  {isScanning
+                    ? 'Scanning...'
+                    : `🔍 Scan Duplicates ${duplicateFolders.length > 0 ? `(${duplicateFolders.length} Folders)` : ''}`}
+                </button>
+              </div>
+
+              {/* List of selected folders */}
+              {duplicateFolders.length === 0 ? (
+                <div
+                  style={{
+                    padding: '24px',
+                    textAlign: 'center',
+                    background: 'rgba(15, 23, 42, 0.4)',
+                    borderRadius: '12px',
+                    border: '1px dashed var(--border-glass-bright)',
+                    color: '#94a3b8',
+                    fontSize: '13px'
+                  }}
+                >
+                  📂 No directories added yet. Click <strong>"📁 Add Directory..."</strong> to select one or more directories to scan across.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {duplicateFolders.map((folder, idx) => (
+                    <div
+                      key={folder + idx}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '12px',
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        border: '1px solid var(--border-glass)'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                        <span style={{ fontSize: '16px' }}>📁</span>
+                        <span
+                          title={folder}
+                          style={{
+                            color: '#f1f5f9',
+                            fontSize: '13px',
+                            fontFamily: 'monospace',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
+                          }}
+                        >
+                          {folder}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveDuplicateFolder(folder)}
+                        title="Remove directory"
+                        style={{
+                          background: 'rgba(244, 63, 94, 0.1)',
+                          border: '1px solid rgba(244, 63, 94, 0.2)',
+                          color: '#f43f5e',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          padding: '4px 8px',
+                          fontSize: '11px',
+                          fontWeight: 'bold',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Duplicate Scan Results */}
@@ -564,7 +668,7 @@ function App() {
 
                 {duplicates.length === 0 ? (
                   <div style={{ padding: '32px', textAlign: 'center', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '14px', border: '1px solid rgba(16, 185, 129, 0.2)', color: '#34d399' }}>
-                    ✨ No duplicate files found in this directory!
+                    ✨ No duplicate files found across the {duplicateFolders.length} scanned directory/directories!
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
