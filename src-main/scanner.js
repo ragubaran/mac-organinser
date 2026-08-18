@@ -32,27 +32,56 @@ function calculateFolderSize(folderPath) {
 }
 
 function hashFile(filePath) {
-  try {
-    const fileBuffer = fs.readFileSync(filePath);
-    const hashSum = crypto.createHash('sha256');
-    hashSum.update(fileBuffer);
-    return hashSum.digest('hex');
-  } catch (e) {
-    return null;
-  }
+  return new Promise((resolve) => {
+    try {
+      const hashSum = crypto.createHash('sha256');
+      const stream = fs.createReadStream(filePath);
+      
+      stream.on('data', (chunk) => {
+        hashSum.update(chunk);
+      });
+      
+      stream.on('end', () => {
+        resolve(hashSum.digest('hex'));
+      });
+      
+      stream.on('error', () => {
+        resolve(null);
+      });
+    } catch (e) {
+      resolve(null);
+    }
+  });
 }
 
-function findDuplicates(folderPathOrPaths) {
+async function pMap(items, mapper, limit = 10) {
+  const results = [];
+  let i = 0;
+  const workers = Array(Math.min(items.length, limit)).fill(null).map(async () => {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await mapper(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+async function findDuplicates(folderPathOrPaths, progressCallback) {
   const sizeMap = {};
   const duplicates = [];
   const visitedDirs = new Set();
   const visitedFiles = new Set();
 
-  function scanDir(dir) {
+  if (progressCallback) progressCallback('scanning_dirs', 0, 0);
+
+  async function scanDir(dir) {
     try {
       let realDirPath = dir;
       try {
-        if (typeof fs.realpathSync === 'function') {
+        if (typeof fs.promises.realpath === 'function') {
+          realDirPath = await fs.promises.realpath(dir);
+        } else if (typeof fs.realpathSync === 'function') {
           realDirPath = fs.realpathSync(dir);
         }
       } catch (e) {}
@@ -60,23 +89,26 @@ function findDuplicates(folderPathOrPaths) {
       if (visitedDirs.has(realDirPath)) return;
       visitedDirs.add(realDirPath);
 
-      const files = fs.readdirSync(dir);
-      for (const file of files) {
+      const files = await fs.promises.readdir(dir);
+      
+      await pMap(files, async (file) => {
         const fullPath = path.join(dir, file);
         try {
-          const stats = fs.statSync(fullPath);
+          const stats = await fs.promises.stat(fullPath);
           const isDirectory = typeof stats.isDirectory === 'function' ? stats.isDirectory() : false;
           if (isDirectory) {
-            scanDir(fullPath);
+            await scanDir(fullPath);
           } else {
             let realFilePath = fullPath;
             try {
-              if (typeof fs.realpathSync === 'function') {
+              if (typeof fs.promises.realpath === 'function') {
+                realFilePath = await fs.promises.realpath(fullPath);
+              } else if (typeof fs.realpathSync === 'function') {
                 realFilePath = fs.realpathSync(fullPath);
               }
             } catch (e) {}
 
-            if (visitedFiles.has(realFilePath)) continue;
+            if (visitedFiles.has(realFilePath)) return;
             visitedFiles.add(realFilePath);
 
             const size = (stats && stats.size !== undefined) ? stats.size : 0;
@@ -89,7 +121,7 @@ function findDuplicates(folderPathOrPaths) {
         } catch (e) {
           // Ignore individual file error
         }
-      }
+      }, 20); // Concurrent limit for directory scan
     } catch (e) {
       // Ignore directory read error
     }
@@ -99,19 +131,39 @@ function findDuplicates(folderPathOrPaths) {
     ? folderPathOrPaths.filter(Boolean)
     : (folderPathOrPaths ? [folderPathOrPaths] : []);
 
-  for (const folder of folderPaths) {
+  await pMap(folderPaths, async (folder) => {
     if (typeof folder === 'string' && folder.trim()) {
-      scanDir(folder.trim());
+      await scanDir(folder.trim());
+    }
+  }, 10);
+
+  // Count how many files need hashing
+  let totalFilesToHash = 0;
+  for (const [sizeStr, fileList] of Object.entries(sizeMap)) {
+    if (fileList.length > 1) {
+      totalFilesToHash += fileList.length;
     }
   }
 
+  let hashedFiles = 0;
+  if (progressCallback && totalFilesToHash > 0) {
+    progressCallback('hashing', hashedFiles, totalFilesToHash);
+  }
+
   // Compare SHA-256 checksums for files that have identical sizes
+  // We can process size buckets sequentially, but hash files within them concurrently
   for (const [sizeStr, fileList] of Object.entries(sizeMap)) {
     if (fileList.length < 2) continue;
 
     const hashMap = {};
-    for (const filePath of fileList) {
-      const checksum = hashFile(filePath);
+    await pMap(fileList, async (filePath) => {
+      const checksum = await hashFile(filePath);
+      hashedFiles++;
+      
+      if (progressCallback) {
+        progressCallback('hashing', hashedFiles, totalFilesToHash);
+      }
+
       if (checksum) {
         if (hashMap[checksum]) {
           hashMap[checksum].push(filePath);
@@ -125,7 +177,7 @@ function findDuplicates(folderPathOrPaths) {
           hashMap[checksum] = [filePath];
         }
       }
-    }
+    }, 15); // Hash up to 15 files concurrently
   }
 
   return duplicates;

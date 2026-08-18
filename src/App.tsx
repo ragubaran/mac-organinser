@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface LogEntry {
   id: string;
@@ -39,8 +39,23 @@ function App() {
   const [duplicates, setDuplicates] = useState<Array<{ original: string; duplicate: string; size?: number; checksum?: string }>>([]);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [isScanning, setIsScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{ status: string; current: number; total: number } | null>(null);
   const [hasScanned, setHasScanned] = useState(false);
   const [isDeletingBatch, setIsDeletingBatch] = useState(false);
+
+  useEffect(() => {
+    const ipc = getIpc();
+    if (!ipc) return;
+    
+    const handleProgress = (_event: any, data: { status: string; current: number; total: number }) => {
+      setScanProgress(data);
+    };
+    
+    ipc.on('duplicate-scan-progress', handleProgress);
+    return () => {
+      ipc.removeListener('duplicate-scan-progress', handleProgress);
+    };
+  }, []);
 
   const addLog = (type: 'info' | 'error' | 'success', message: string, details?: string) => {
     const entry: LogEntry = {
@@ -191,6 +206,7 @@ function App() {
     const ipc = getIpc();
     if (!ipc) return;
     setIsScanning(true);
+    setScanProgress(null);
     setHasScanned(false);
     setSelectedIndices(new Set());
     addLog('info', `Scanning recursively for duplicates in ${duplicateFolders.length} directory/directories: ${duplicateFolders.join(', ')}`);
@@ -552,7 +568,9 @@ function App() {
                   className="btn btn-primary"
                 >
                   {isScanning
-                    ? 'Scanning...'
+                    ? scanProgress?.status === 'hashing' && scanProgress.total > 0
+                      ? `⏳ Hashing: ${Math.round((scanProgress.current / scanProgress.total) * 100)}% (${scanProgress.current}/${scanProgress.total})`
+                      : 'Scanning Directories...'
                     : `🔍 Scan Duplicates ${duplicateFolders.length > 0 ? `(${duplicateFolders.length} Folders)` : ''}`}
                 </button>
               </div>

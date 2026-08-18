@@ -8,7 +8,9 @@ describe('App', () => {
   beforeEach(() => {
     (window as any).require = vi.fn().mockReturnValue({
       ipcRenderer: {
-        invoke: vi.fn().mockResolvedValue({ success: true, stdout: 'cleaned' })
+        invoke: vi.fn().mockResolvedValue({ success: true, stdout: 'cleaned' }),
+        on: vi.fn(),
+        removeListener: vi.fn()
       }
     });
     window.alert = vi.fn();
@@ -48,7 +50,9 @@ describe('App', () => {
   it('handles clean cache failure', async () => {
     (window as any).require = vi.fn().mockReturnValue({
       ipcRenderer: {
-        invoke: vi.fn().mockResolvedValue({ success: false, error: 'failed to clean' })
+        invoke: vi.fn().mockResolvedValue({ success: false, error: 'failed to clean' }),
+        on: vi.fn(),
+        removeListener: vi.fn()
       }
     });
 
@@ -83,7 +87,11 @@ describe('App', () => {
     });
 
     (window as any).require = vi.fn().mockReturnValue({
-      ipcRenderer: { invoke: invokeMock }
+      ipcRenderer: {
+        invoke: invokeMock,
+        on: vi.fn(),
+        removeListener: vi.fn()
+      }
     });
 
     render(<App />);

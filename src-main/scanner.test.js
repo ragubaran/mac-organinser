@@ -4,6 +4,7 @@ import { getFileSize, calculateFolderSize, hashFile, findDuplicates } from './sc
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
 
 describe('scanner', () => {
   beforeEach(() => {
@@ -52,39 +53,50 @@ describe('scanner', () => {
   });
 
   describe('hashFile', () => {
-    it('should return hash of file', () => {
+    it('should return hash of file', async () => {
       const mockUpdate = vi.fn();
       const mockDigest = vi.fn().mockReturnValue('mockhash');
       vi.spyOn(crypto, 'createHash').mockReturnValue({ update: mockUpdate, digest: mockDigest });
-      vi.spyOn(fs, 'readFileSync').mockReturnValue('file content');
+      
+      const mockStream = new EventEmitter();
+      vi.spyOn(fs, 'createReadStream').mockReturnValue(mockStream);
 
-      const hash = hashFile('test.txt');
+      const hashPromise = hashFile('test.txt');
+      mockStream.emit('data', 'file content');
+      mockStream.emit('end');
+      
+      const hash = await hashPromise;
       expect(hash).toBe('mockhash');
-      expect(fs.readFileSync).toHaveBeenCalledWith('test.txt');
+      expect(fs.createReadStream).toHaveBeenCalledWith('test.txt');
       expect(crypto.createHash).toHaveBeenCalledWith('sha256');
     });
 
-    it('should return null if error occurs', () => {
-      vi.spyOn(fs, 'readFileSync').mockImplementation(() => { throw new Error('Not found'); });
-      const hash = hashFile('missing.txt');
+    it('should return null if error occurs', async () => {
+      const mockStream = new EventEmitter();
+      vi.spyOn(fs, 'createReadStream').mockReturnValue(mockStream);
+      
+      const hashPromise = hashFile('missing.txt');
+      mockStream.emit('error', new Error('Not found'));
+      
+      const hash = await hashPromise;
       expect(hash).toBeNull();
     });
   });
 
   describe('findDuplicates', () => {
-    it('should find duplicates based on file hashes', () => {
-      vi.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+    it('should find duplicates based on file hashes', async () => {
+      vi.spyOn(fs.promises, 'readdir').mockImplementation(async (dir) => {
         if (dir === 'root') return ['file1.txt', 'subfolder'];
         if (dir === path.join('root', 'subfolder')) return ['file2.txt', 'file3.txt'];
         return [];
       });
 
-      vi.spyOn(fs, 'statSync').mockImplementation((p) => {
-        if (p === path.join('root', 'file1.txt')) return { isDirectory: () => false };
-        if (p === path.join('root', 'subfolder')) return { isDirectory: () => true };
-        if (p === path.join('root', 'subfolder', 'file2.txt')) return { isDirectory: () => false };
-        if (p === path.join('root', 'subfolder', 'file3.txt')) return { isDirectory: () => false };
-        return { isDirectory: () => false };
+      vi.spyOn(fs.promises, 'stat').mockImplementation(async (p) => {
+        if (p === path.join('root', 'file1.txt')) return { size: 50, isDirectory: () => false };
+        if (p === path.join('root', 'subfolder')) return { size: 0, isDirectory: () => true };
+        if (p === path.join('root', 'subfolder', 'file2.txt')) return { size: 50, isDirectory: () => false };
+        if (p === path.join('root', 'subfolder', 'file3.txt')) return { size: 60, isDirectory: () => false };
+        return { size: 0, isDirectory: () => false };
       });
 
       vi.spyOn(crypto, 'createHash').mockImplementation(() => {
@@ -95,14 +107,18 @@ describe('scanner', () => {
         };
       });
       
-      vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
-        if (p === path.join('root', 'file1.txt')) return 'content A';
-        if (p === path.join('root', 'subfolder', 'file2.txt')) return 'content A'; // duplicate
-        if (p === path.join('root', 'subfolder', 'file3.txt')) return 'content B'; // unique
-        return '';
+      vi.spyOn(fs, 'createReadStream').mockImplementation((p) => {
+        const stream = new EventEmitter();
+        setTimeout(() => {
+          if (p === path.join('root', 'file1.txt')) stream.emit('data', 'content A');
+          if (p === path.join('root', 'subfolder', 'file2.txt')) stream.emit('data', 'content A'); // duplicate
+          if (p === path.join('root', 'subfolder', 'file3.txt')) stream.emit('data', 'content B'); // unique
+          stream.emit('end');
+        }, 0);
+        return stream;
       });
 
-      const duplicates = findDuplicates('root');
+      const duplicates = await findDuplicates('root');
       expect(duplicates).toHaveLength(1);
       expect(duplicates[0]).toEqual(expect.objectContaining({
         original: path.join('root', 'file1.txt'),
@@ -110,14 +126,14 @@ describe('scanner', () => {
       }));
     });
 
-    it('should find duplicates across multiple directories', () => {
-      vi.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+    it('should find duplicates across multiple directories', async () => {
+      vi.spyOn(fs.promises, 'readdir').mockImplementation(async (dir) => {
         if (dir === 'dirA') return ['doc1.txt'];
         if (dir === 'dirB') return ['doc2.txt'];
         return [];
       });
 
-      vi.spyOn(fs, 'statSync').mockImplementation((p) => {
+      vi.spyOn(fs.promises, 'stat').mockImplementation(async (p) => {
         if (p === path.join('dirA', 'doc1.txt')) return { size: 50, isDirectory: () => false };
         if (p === path.join('dirB', 'doc2.txt')) return { size: 50, isDirectory: () => false };
         return { isDirectory: () => false };
@@ -131,9 +147,16 @@ describe('scanner', () => {
         };
       });
 
-      vi.spyOn(fs, 'readFileSync').mockImplementation(() => 'same file content');
+      vi.spyOn(fs, 'createReadStream').mockImplementation(() => {
+        const stream = new EventEmitter();
+        setTimeout(() => {
+          stream.emit('data', 'same file content');
+          stream.emit('end');
+        }, 0);
+        return stream;
+      });
 
-      const duplicates = findDuplicates(['dirA', 'dirB']);
+      const duplicates = await findDuplicates(['dirA', 'dirB']);
       expect(duplicates).toHaveLength(1);
       expect(duplicates[0]).toEqual(expect.objectContaining({
         original: path.join('dirA', 'doc1.txt'),
@@ -143,26 +166,30 @@ describe('scanner', () => {
       }));
     });
 
-    it('should handle duplicate folder arguments and empty/invalid input', () => {
-      vi.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+    it('should handle duplicate folder arguments and empty/invalid input', async () => {
+      vi.spyOn(fs.promises, 'readdir').mockImplementation(async (dir) => {
         if (dir === 'dirA') return ['doc1.txt'];
         return [];
       });
-      vi.spyOn(fs, 'statSync').mockImplementation(() => ({ size: 50, isDirectory: () => false }));
+      vi.spyOn(fs.promises, 'stat').mockImplementation(async () => ({ size: 50, isDirectory: () => false }));
       vi.spyOn(crypto, 'createHash').mockImplementation(() => ({
         update: vi.fn(),
         digest: () => 'hash'
       }));
-      vi.spyOn(fs, 'readFileSync').mockReturnValue('data');
+      vi.spyOn(fs, 'createReadStream').mockImplementation(() => {
+        const stream = new EventEmitter();
+        setTimeout(() => { stream.emit('end'); }, 0);
+        return stream;
+      });
 
-      expect(findDuplicates([])).toEqual([]);
-      expect(findDuplicates(null)).toEqual([]);
-      expect(findDuplicates(['dirA', 'dirA'])).toEqual([]);
+      expect(await findDuplicates([])).toEqual([]);
+      expect(await findDuplicates(null)).toEqual([]);
+      expect(await findDuplicates(['dirA', 'dirA'])).toEqual([]);
     });
 
-    it('should handle errors gracefully during scan', () => {
-      vi.spyOn(fs, 'readdirSync').mockImplementation(() => { throw new Error('Permission denied'); });
-      const duplicates = findDuplicates('root');
+    it('should handle errors gracefully during scan', async () => {
+      vi.spyOn(fs.promises, 'readdir').mockImplementation(async () => { throw new Error('Permission denied'); });
+      const duplicates = await findDuplicates('root');
       expect(duplicates).toEqual([]);
     });
   });

@@ -124,7 +124,7 @@ ipcMain.handle('select-folder', async (event, options = {}) => {
 
 ipcMain.handle('organize-folder', async (event, folderPath) => {
   try {
-    const res = organizer.organizeFolder(folderPath);
+    const res = await organizer.organizeFolder(folderPath);
     return { success: true, ...res };
   } catch (error) {
     return { success: false, error: error.message };
@@ -133,7 +133,10 @@ ipcMain.handle('organize-folder', async (event, folderPath) => {
 
 ipcMain.handle('find-duplicates', async (event, folderPathOrPaths) => {
   try {
-    const duplicates = scanner.findDuplicates(folderPathOrPaths);
+    const progressCallback = (status, current, total) => {
+      event.sender.send('duplicate-scan-progress', { status, current, total });
+    };
+    const duplicates = await scanner.findDuplicates(folderPathOrPaths, progressCallback);
     return { success: true, duplicates };
   } catch (error) {
     return { success: false, error: error.message };

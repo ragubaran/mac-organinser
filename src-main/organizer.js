@@ -21,51 +21,70 @@ function getCategoryForExtension(ext, rules = defaultRules) {
   return 'Others';
 }
 
-function getUniqueFilePath(destFolder, fileName) {
+async function getUniqueFilePath(destFolder, fileName) {
   let targetPath = path.join(destFolder, fileName);
-  if (!fs.existsSync(targetPath)) return targetPath;
+  
+  const checkExists = async (p) => {
+    try {
+      await fs.promises.access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (!(await checkExists(targetPath))) return targetPath;
 
   const ext = path.extname(fileName);
   const baseName = path.basename(fileName, ext);
   let counter = 1;
 
-  while (fs.existsSync(targetPath) && counter < 1000) {
+  while ((await checkExists(targetPath)) && counter < 1000) {
     targetPath = path.join(destFolder, `${baseName}_${counter}${ext}`);
     counter++;
   }
   return targetPath;
 }
 
-function organizeFolder(folderPath, rules = defaultRules, recursive = true) {
+async function pMap(items, mapper, limit = 30) {
+  const results = [];
+  let i = 0;
+  const workers = Array(Math.min(items.length, limit)).fill(null).map(async () => {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await mapper(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+async function organizeFolder(folderPath, rules = defaultRules, recursive = true) {
   const results = {
     moved: 0,
     errors: 0
   };
 
-  function processDirectory(currentDir) {
+  async function processDirectory(currentDir) {
     try {
-      const items = fs.readdirSync(currentDir);
+      const items = await fs.promises.readdir(currentDir);
 
-      for (const item of items) {
+      await pMap(items, async (item) => {
         const fullPath = path.join(currentDir, item);
         try {
-          const stats = fs.statSync(fullPath);
+          const stats = await fs.promises.stat(fullPath);
           const isDirectory = typeof stats.isDirectory === 'function' ? stats.isDirectory() : (typeof stats.isFile === 'function' ? !stats.isFile() : false);
           const isFile = typeof stats.isFile === 'function' ? stats.isFile() : !isDirectory;
 
           if (isDirectory) {
             // Skip target category directories created at root level
             if (currentDir === folderPath && categoryNames.includes(item)) {
-              continue;
+              return;
             }
             if (recursive) {
-              processDirectory(fullPath);
-              // Clean up empty subdirectories after moving files out
+              await processDirectory(fullPath);
               try {
-                const remaining = fs.readdirSync(fullPath);
-                if (remaining.length === 0) {
-                  fs.rmdirSync(fullPath);
-                }
+                await fs.promises.rm(fullPath, { recursive: true, force: true });
               } catch (e) {}
             }
           } else if (isFile) {
@@ -75,27 +94,29 @@ function organizeFolder(folderPath, rules = defaultRules, recursive = true) {
 
             // Avoid moving if file is already in its destination category folder
             if (currentDir === categoryFolder) {
-              continue;
+              return;
             }
 
-            if (!fs.existsSync(categoryFolder)) {
-              fs.mkdirSync(categoryFolder, { recursive: true });
+            try {
+              await fs.promises.access(categoryFolder);
+            } catch (err) {
+              await fs.promises.mkdir(categoryFolder, { recursive: true });
             }
 
-            const newPath = getUniqueFilePath(categoryFolder, item);
-            fs.renameSync(fullPath, newPath);
+            const newPath = await getUniqueFilePath(categoryFolder, item);
+            await fs.promises.rename(fullPath, newPath);
             results.moved++;
           }
         } catch (e) {
           results.errors++;
         }
-      }
+      }, 30); // 30 concurrent file operations per directory
     } catch (e) {
       results.errors++;
     }
   }
 
-  processDirectory(folderPath);
+  await processDirectory(folderPath);
   return results;
 }
 
