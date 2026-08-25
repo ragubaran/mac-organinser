@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+const WorkerPool = require('./worker-pool');
+
 function getFileSize(filePath) {
   try {
     const stats = fs.statSync(filePath);
@@ -131,11 +133,65 @@ async function findDuplicates(folderPathOrPaths, progressCallback) {
     ? folderPathOrPaths.filter(Boolean)
     : (folderPathOrPaths ? [folderPathOrPaths] : []);
 
-  await pMap(folderPaths, async (folder) => {
-    if (typeof folder === 'string' && folder.trim()) {
-      await scanDir(folder.trim());
+  const isTest = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+  let scanPool = null;
+
+  if (!isTest) {
+    try {
+      const scanWorkerScript = path.join(__dirname, 'scanner-worker.js');
+      scanPool = new WorkerPool(scanWorkerScript);
+    } catch (e) {}
+  }
+
+  if (scanPool && scanPool.workers.length > 0) {
+    const queue = [...folderPaths];
+    while (queue.length > 0) {
+      const currentBatch = queue.splice(0, scanPool.workers.length * 2);
+      const batchResults = await Promise.all(
+        currentBatch.map(async (dir) => {
+          if (!dir || typeof dir !== 'string') return null;
+          const trimmed = dir.trim();
+          if (!trimmed || visitedDirs.has(trimmed)) return null;
+          visitedDirs.add(trimmed);
+          try {
+            return await scanPool.exec({ dirPath: trimmed });
+          } catch (e) {
+            return null;
+          }
+        })
+      );
+
+      for (const res of batchResults) {
+        if (!res) continue;
+        if (res.dirEntries) {
+          for (const d of res.dirEntries) {
+            if (!visitedDirs.has(d)) queue.push(d);
+          }
+        }
+        if (res.fileEntries) {
+          for (const f of res.fileEntries) {
+            if (!visitedFiles.has(f.fullPath)) {
+              visitedFiles.add(f.fullPath);
+              if (!sizeMap[f.size]) {
+                sizeMap[f.size] = [f.fullPath];
+              } else {
+                sizeMap[f.size].push(f.fullPath);
+              }
+            }
+          }
+        }
+      }
     }
-  }, 10);
+    try {
+      scanPool.terminate();
+    } catch (e) {}
+  } else {
+    await pMap(folderPaths, async (folder) => {
+      if (typeof folder === 'string' && folder.trim()) {
+        await scanDir(folder.trim());
+      }
+    }, 10);
+  }
 
   // Count how many files need hashing
   let totalFilesToHash = 0;
@@ -150,14 +206,31 @@ async function findDuplicates(folderPathOrPaths, progressCallback) {
     progressCallback('hashing', hashedFiles, totalFilesToHash);
   }
 
+  let pool = null;
+  if (!isTest) {
+    try {
+      const workerScript = path.join(__dirname, 'hash-worker.js');
+      pool = new WorkerPool(workerScript);
+    } catch (e) {}
+  }
+
+  async function computeHash(filePath) {
+    if (pool && pool.workers.length > 0) {
+      try {
+        const res = await pool.exec({ filePath });
+        if (res && res.checksum !== undefined) return res.checksum;
+      } catch (e) {}
+    }
+    return await hashFile(filePath);
+  }
+
   // Compare SHA-256 checksums for files that have identical sizes
-  // We can process size buckets sequentially, but hash files within them concurrently
   for (const [sizeStr, fileList] of Object.entries(sizeMap)) {
     if (fileList.length < 2) continue;
 
     const hashMap = {};
     await pMap(fileList, async (filePath) => {
-      const checksum = await hashFile(filePath);
+      const checksum = await computeHash(filePath);
       hashedFiles++;
       
       if (progressCallback) {
@@ -178,6 +251,12 @@ async function findDuplicates(folderPathOrPaths, progressCallback) {
         }
       }
     }, 15); // Hash up to 15 files concurrently
+  }
+
+  if (pool) {
+    try {
+      pool.terminate();
+    } catch (e) {}
   }
 
   return duplicates;

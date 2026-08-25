@@ -227,4 +227,14 @@ describe('organizer', () => {
       expect(result.errors).toBe(1);
     });
   });
+
+  describe('WorkerPool', () => {
+    it('should instantiate and terminate WorkerPool', () => {
+      const WorkerPoolClass = require('./worker-pool');
+      const pool = new WorkerPoolClass(path.join(__dirname, 'hash-worker.js'), 2);
+      expect(pool.workers.length).toBe(2);
+      pool.terminate();
+      expect(pool.workers.length).toBe(0);
+    });
+  });
 });

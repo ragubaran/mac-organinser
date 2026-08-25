@@ -171,6 +171,8 @@ function isAuditLogFile(fileName) {
   return lower.startsWith('organizer-audit') || lower === 'log-file.log';
 }
 
+const WorkerPool = require('./worker-pool');
+
 async function organizeFolder(folderPath, rules = defaultRules, recursive = true, progressCallback, options = {}) {
   const { excludedCategories = [], excludedExtensions = [] } = options || {};
   const lowerExcludedCats = (excludedCategories || []).map((c) => String(c).toLowerCase());
@@ -180,6 +182,25 @@ async function organizeFolder(folderPath, rules = defaultRules, recursive = true
     if (lowerExcludedExts.includes(ext.toLowerCase())) return true;
     if (lowerExcludedCats.includes(category.toLowerCase())) return true;
     return false;
+  }
+
+  let pool = null;
+  const isTest = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+  if (!isTest) {
+    try {
+      const workerScript = path.join(__dirname, 'organizer-worker.js');
+      pool = new WorkerPool(workerScript);
+    } catch (e) {}
+  }
+
+  async function performMove(source, dest) {
+    if (pool && pool.workers.length > 0) {
+      try {
+        const res = await pool.exec({ action: 'move_file', payload: { source, dest } });
+        if (res && res.success) return;
+      } catch (e) {}
+    }
+    await fs.promises.rename(source, dest);
   }
 
   const dateStr = getFormattedDateDDMMYY();
@@ -285,7 +306,7 @@ async function organizeFolder(folderPath, rules = defaultRules, recursive = true
                 const subFilesCount = statsInfo.videoCount + statsInfo.nonVideoCount;
 
                 const newPath = await getUniqueFilePath(categoryFolder, item);
-                await fs.promises.rename(fullPath, newPath);
+                await performMove(fullPath, newPath);
 
                 logAudit('MOVED PARENT FOLDER', `${fullPath} -> ${newPath}`);
                 results.moved += (subFilesCount || 1);
@@ -331,7 +352,7 @@ async function organizeFolder(folderPath, rules = defaultRules, recursive = true
             }
 
             const newPath = await getUniqueFilePath(categoryFolder, item);
-            await fs.promises.rename(fullPath, newPath);
+            await performMove(fullPath, newPath);
             logAudit('MOVED FILE', `${fullPath} -> ${newPath}`);
             results.moved++;
             processedFiles++;
@@ -351,6 +372,12 @@ async function organizeFolder(folderPath, rules = defaultRules, recursive = true
   }
 
   await processDirectory(folderPath);
+
+  if (pool) {
+    try {
+      pool.terminate();
+    } catch (e) {}
+  }
 
   auditEntries.push('-'.repeat(80));
   auditEntries.push(`Summary: Moved = ${results.moved}, Errors = ${results.errors}`);
