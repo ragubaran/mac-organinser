@@ -96,6 +96,8 @@ ipcMain.handle('clean-cache', async (event, commandName) => {
 
     if (!cmd) return { success: false, error: 'Unknown command' };
 
+    event.sender.send('clean-progress', { status: 'Cleaning in progress...', current: 0, total: 0 });
+
     const env = getEnhancedEnv();
     const { stdout, stderr } = await execPromise(cmd, { env, shell: '/bin/zsh' });
     return { success: true, stdout: stdout || stderr || 'Cache cleaned successfully' };
@@ -122,9 +124,12 @@ ipcMain.handle('select-folder', async (event, options = {}) => {
   }
 });
 
-ipcMain.handle('organize-folder', async (event, folderPath) => {
+ipcMain.handle('organize-folder', async (event, folderPath, options = {}) => {
   try {
-    const res = await organizer.organizeFolder(folderPath);
+    const progressCallback = (status, current, total) => {
+      event.sender.send('organize-progress', { status, current, total });
+    };
+    const res = await organizer.organizeFolder(folderPath, undefined, true, progressCallback, options);
     return { success: true, ...res };
   } catch (error) {
     return { success: false, error: error.message };

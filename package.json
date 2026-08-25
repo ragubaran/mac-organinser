@@ -14,6 +14,7 @@
   },
   "build": {
     "appId": "com.filesorganizer.app",
+    "compression": "maximum",
     "mac": {
       "category": "public.app-category.utilities",
       "target": [
@@ -29,11 +30,9 @@
       "src-main/**/*"
     ]
   },
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
-  },
   "devDependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",

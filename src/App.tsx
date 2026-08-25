@@ -17,6 +17,94 @@ function formatBytes(bytes?: number) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+function GlobalProgressBar({ progress }: { progress: { title: string, status: string, current: number, total: number, startTime: number } }) {
+  const [eta, setEta] = useState<string>('Calculating...');
+
+  useEffect(() => {
+    if (progress.total === 0 || progress.current === 0) {
+      setEta('Calculating...');
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const timeElapsed = (Date.now() - progress.startTime) / 1000;
+      if (timeElapsed < 2) return; // Wait 2 seconds before showing ETA for stability
+
+      const itemsPerSec = progress.current / timeElapsed;
+      const etaSeconds = Math.max(0, (progress.total - progress.current) / itemsPerSec);
+
+      if (!isFinite(etaSeconds)) {
+        setEta('Calculating...');
+      } else if (etaSeconds > 3600) {
+        setEta(`${Math.floor(etaSeconds / 3600)}h ${Math.floor((etaSeconds % 3600) / 60)}m left`);
+      } else if (etaSeconds > 60) {
+        setEta(`${Math.floor(etaSeconds / 60)}m ${Math.floor(etaSeconds % 60)}s left`);
+      } else {
+        setEta(`${Math.floor(etaSeconds)}s left`);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [progress]);
+
+  const isIndeterminate = progress.total === 0;
+  const percentage = isIndeterminate ? 100 : Math.min(100, (progress.current / progress.total) * 100);
+
+  return (
+    <div style={{
+      position: 'fixed',
+      bottom: '0', left: '0', right: '0',
+      background: 'rgba(15, 23, 42, 0.95)',
+      backdropFilter: 'blur(10px)',
+      borderTop: '1px solid var(--border-glass)',
+      padding: '16px 24px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+      zIndex: 100,
+      transform: 'translateY(0)',
+      animation: 'slideUp 0.3s ease-out'
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '14px', fontWeight: 600, color: '#f8fafc' }}>{progress.title}</span>
+          <span style={{ fontSize: '12px', color: '#94a3b8' }}>- {progress.status}</span>
+        </div>
+        {!isIndeterminate && (
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+            <span style={{ fontSize: '12px', color: '#cbd5e1', fontWeight: 500 }}>
+              {progress.current.toLocaleString()} / {progress.total.toLocaleString()}
+            </span>
+            <span style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 600, background: 'rgba(56, 189, 248, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+              {eta}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div style={{
+        height: '6px',
+        background: 'rgba(30, 41, 59, 0.8)',
+        borderRadius: '3px',
+        overflow: 'hidden',
+        position: 'relative'
+      }}>
+        <div
+          className={isIndeterminate ? 'indeterminate-bar' : ''}
+          style={{
+            height: '100%',
+            width: isIndeterminate ? '30%' : `${percentage}%`,
+            background: 'var(--gradient-brand)',
+            borderRadius: '3px',
+            transition: isIndeterminate ? 'none' : 'width 0.2s ease-out',
+            boxShadow: '0 0 10px rgba(56, 189, 248, 0.5)'
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<'cache' | 'organizer' | 'duplicate'>('cache');
 
@@ -31,8 +119,17 @@ function App() {
 
   // Smart Organizer state
   const [organizerFolder, setOrganizerFolder] = useState('');
-  const [organizerResult, setOrganizerResult] = useState<{ moved: number; errors: number } | null>(null);
+  const [organizerResult, setOrganizerResult] = useState<{ moved: number; errors: number; auditLogPath?: string } | null>(null);
   const [isOrganizing, setIsOrganizing] = useState(false);
+  const [excludedCategories, setExcludedCategories] = useState<string[]>([]);
+
+  const toggleExcludeCategory = (category: string) => {
+    setExcludedCategories((prev) =>
+      prev.includes(category)
+        ? prev.filter((c) => c !== category)
+        : [...prev, category]
+    );
+  };
 
   // Duplicate Finder state
   const [duplicateFolders, setDuplicateFolders] = useState<string[]>([]);
@@ -43,17 +140,52 @@ function App() {
   const [hasScanned, setHasScanned] = useState(false);
   const [isDeletingBatch, setIsDeletingBatch] = useState(false);
 
+  // Global Progress State
+  const [globalProgress, setGlobalProgress] = useState<{ title: string; status: string; current: number; total: number; startTime: number } | null>(null);
+
   useEffect(() => {
     const ipc = getIpc();
     if (!ipc) return;
     
-    const handleProgress = (_event: any, data: { status: string; current: number; total: number }) => {
+    const handleDuplicateProgress = (_event: any, data: { status: string; current: number; total: number }) => {
       setScanProgress(data);
+      setGlobalProgress(prev => ({
+        title: 'Duplicate Finder',
+        status: data.status === 'scanning_dirs' ? 'Scanning directories...' : 'Hashing files...',
+        current: data.current,
+        total: data.total,
+        startTime: prev ? prev.startTime : Date.now()
+      }));
+    };
+
+    const handleOrganizeProgress = (_event: any, data: { status: string; current: number; total: number }) => {
+      setGlobalProgress(prev => ({
+        title: 'Smart Organizer',
+        status: data.status === 'counting' ? 'Pre-scanning files...' : 'Organizing files...',
+        current: data.current,
+        total: data.total,
+        startTime: prev ? prev.startTime : Date.now()
+      }));
+    };
+
+    const handleCleanProgress = (_event: any, data: { status: string; current: number; total: number }) => {
+      setGlobalProgress({
+        title: 'Cache Cleaner',
+        status: data.status,
+        current: data.current,
+        total: data.total,
+        startTime: Date.now()
+      });
     };
     
-    ipc.on('duplicate-scan-progress', handleProgress);
+    ipc.on('duplicate-scan-progress', handleDuplicateProgress);
+    ipc.on('organize-progress', handleOrganizeProgress);
+    ipc.on('clean-progress', handleCleanProgress);
+
     return () => {
-      ipc.removeListener('duplicate-scan-progress', handleProgress);
+      ipc.removeListener('duplicate-scan-progress', handleDuplicateProgress);
+      ipc.removeListener('organize-progress', handleOrganizeProgress);
+      ipc.removeListener('clean-progress', handleCleanProgress);
     };
   }, []);
 
@@ -101,6 +233,7 @@ function App() {
     } finally {
       setIsCleaning(false);
       setActiveCleanTool(null);
+      setGlobalProgress(null);
     }
   };
 
@@ -179,12 +312,16 @@ function App() {
     if (!ipc) return;
     setIsOrganizing(true);
     setOrganizerResult(null);
-    addLog('info', `Starting recursive folder organization in: ${organizerFolder}`);
+    addLog('info', `Starting recursive folder organization in: ${organizerFolder}${excludedCategories.length > 0 ? ` (Excluded: ${excludedCategories.join(', ')})` : ''}`);
     try {
-      const result = await ipc.invoke('organize-folder', organizerFolder);
+      const result = await ipc.invoke('organize-folder', organizerFolder, { excludedCategories });
       if (result.success) {
-        setOrganizerResult({ moved: result.moved, errors: result.errors });
-        addLog('success', `Organized folder recursively. Moved ${result.moved} file(s).`, `Errors encountered: ${result.errors}`);
+        setOrganizerResult({ moved: result.moved, errors: result.errors, auditLogPath: result.auditLogPath });
+        addLog(
+          'success',
+          `Organized folder recursively. Moved ${result.moved} item(s).`,
+          `Audit log saved to: ${result.auditLogPath || 'organizer-audit.log'} (Errors: ${result.errors})`
+        );
       } else {
         addLog('error', `Failed to organize folder: ${result.error}`);
         alert(`Failed to organize folder: ${result.error}`);
@@ -194,6 +331,7 @@ function App() {
       alert(`Error: ${e.message}`);
     } finally {
       setIsOrganizing(false);
+      setGlobalProgress(null);
     }
   };
 
@@ -226,6 +364,7 @@ function App() {
       alert(`Error: ${e.message}`);
     } finally {
       setIsScanning(false);
+      setGlobalProgress(null);
     }
   };
 
@@ -480,7 +619,7 @@ function App() {
             <div style={{ marginBottom: '24px' }}>
               <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#f8fafc' }}>Smart Organizer (Recursive)</h2>
               <p style={{ color: '#94a3b8', fontSize: '14px', marginTop: '4px' }}>
-                Select a directory to organize top-level files and nested subfolder contents recursively into category folders.
+                Select a directory to organize top-level files and nested subfolders recursively into category folders. (Subfolders with multiple videos move intact with parent folder).
               </p>
             </div>
 
@@ -506,22 +645,50 @@ function App() {
               </button>
             </div>
 
-            {/* Rules preview */}
+            {/* Rules preview & Exclusion Flags */}
             <div style={{ background: 'rgba(15, 23, 42, 0.6)', padding: '20px', borderRadius: '14px', border: '1px solid var(--border-glass)' }}>
-              <h4 style={{ margin: '0 0 14px', color: '#cbd5e1', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Automatic Categories & Extensions:</h4>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                <h4 style={{ margin: 0, color: '#cbd5e1', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Category Rules & Exclusion Flags:
+                </h4>
+                <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                  💡 Click any category badge to toggle <strong>Exclude (Skip)</strong> flag
+                </span>
+              </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                 {[
                   { name: 'Images', ext: '.jpg, .png, .gif, .webp, .svg' },
                   { name: 'Documents', ext: '.pdf, .docx, .txt, .md, .csv, .json' },
                   { name: 'Archives', ext: '.zip, .tar, .gz, .rar, .7z, .dmg' },
                   { name: 'Audio', ext: '.mp3, .wav, .flac, .m4a' },
-                  { name: 'Video', ext: '.mp4, .mkv, .avi, .mov' },
+                  { name: 'Video', ext: '.mp4, .mkv, .avi, .mov (multi-video folders moved with parent folder)' },
                   { name: 'Others', ext: 'all uncategorized files' }
-                ].map((cat) => (
-                  <span key={cat.name} style={{ background: 'rgba(30, 41, 59, 0.7)', color: '#94a3b8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', border: '1px solid var(--border-glass)' }}>
-                    <strong style={{ color: '#38bdf8' }}>{cat.name}:</strong> {cat.ext}
-                  </span>
-                ))}
+                ].map((cat) => {
+                  const isExcluded = excludedCategories.includes(cat.name);
+                  return (
+                    <button
+                      key={cat.name}
+                      onClick={() => toggleExcludeCategory(cat.name)}
+                      style={{
+                        background: isExcluded ? 'rgba(244, 63, 94, 0.15)' : 'rgba(30, 41, 59, 0.7)',
+                        color: isExcluded ? '#f43f5e' : '#94a3b8',
+                        padding: '8px 14px',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        border: isExcluded ? '1px solid rgba(244, 63, 94, 0.4)' : '1px solid var(--border-glass)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <strong style={{ color: isExcluded ? '#f43f5e' : '#38bdf8' }}>{cat.name}:</strong>
+                      <span>{cat.ext}</span>
+                      {isExcluded && <span style={{ fontSize: '10px', background: 'rgba(244, 63, 94, 0.2)', color: '#f43f5e', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>EXCLUDED 🚫</span>}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -532,8 +699,13 @@ function App() {
                 <div>
                   <strong style={{ fontSize: '15px' }}>Organization Complete!</strong>
                   <div style={{ fontSize: '13px', marginTop: '2px', opacity: 0.9 }}>
-                    Moved <strong>{organizerResult.moved}</strong> file(s) into organized category folders. (Errors: {organizerResult.errors})
+                    Moved <strong>{organizerResult.moved}</strong> item(s) into category folders. (Errors: {organizerResult.errors})
                   </div>
+                  {organizerResult.auditLogPath && (
+                    <div style={{ fontSize: '12px', marginTop: '6px', color: '#6ee7b7', fontFamily: 'monospace' }}>
+                      📋 Audit Log: {organizerResult.auditLogPath}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -853,6 +1025,9 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Global Progress Bar */}
+      {globalProgress && <GlobalProgressBar progress={globalProgress} />}
     </div>
   );
 }

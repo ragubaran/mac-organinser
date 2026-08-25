@@ -302,3 +302,17 @@ body {
   box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.7);
   overflow: hidden;
 }
+
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes indeterminateProgress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(330%); }
+}
+
+.indeterminate-bar {
+  animation: indeterminateProgress 1.5s infinite ease-in-out;
+}
